@@ -1,8 +1,10 @@
 /**
- * Advanced Roblox Connections Finder backend
- * -------------------------------------------
- * Safely crawls Roblox's friends API to find friend-of-friend chains.
- * Works on Render free tier without hitting rate limits.
+ * Roblox Connections Finder Backend
+ * ---------------------------------
+ * Works for every player — uses the player's own UserId from Roblox.
+ * Crawls Roblox's public Friends API safely and returns connection chains.
+ * 
+ * Author: You 😊
  */
 
 import express from "express";
@@ -12,25 +14,27 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // --- CONFIGURATION ---
-const MAX_DEPTH = 3;          // how many hops deep (You -> Friend -> Friend -> Target)
-const MAX_FRIENDS = 100;      // how many friends per user to inspect
-const DELAY_MS = 300;         // pause between Roblox API calls
+const MAX_DEPTH = 3;          // how deep the chain can go (You -> Friend -> Friend -> Target)
+const MAX_FRIENDS = 100;      // how many friends per user to check
+const DELAY_MS = 300;         // wait time between requests (prevents Roblox rate-limiting)
 
-// helper: delay
+// --- HELPER FUNCTIONS ---
+
+// Wait function
 const wait = (ms) => new Promise(r => setTimeout(r, ms));
 
-// helper: get userId from username (new endpoint)
+// Convert username to userId using Roblox's new API
 async function getUserId(username) {
   const res = await fetch("https://users.roblox.com/v1/usernames/users", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ usernames: [username] })
+    body: JSON.stringify({ usernames: [username] }),
   });
   const data = await res.json();
   return data?.data?.[0]?.id || null;
 }
 
-// helper: get username from userId
+// Convert userId to username
 async function getUsername(userId) {
   const res = await fetch(`https://users.roblox.com/v1/users/${userId}`);
   if (!res.ok) return String(userId);
@@ -38,7 +42,7 @@ async function getUsername(userId) {
   return data.name || String(userId);
 }
 
-// helper: get friend ids for a user
+// Get a user's friends (limited to MAX_FRIENDS)
 async function getFriends(userId) {
   await wait(DELAY_MS);
   const res = await fetch(`https://friends.roblox.com/v1/users/${userId}/friends`);
@@ -47,7 +51,7 @@ async function getFriends(userId) {
   return data.data.slice(0, MAX_FRIENDS).map(f => f.id);
 }
 
-// main search
+// Core search function (Breadth-First Search)
 async function findConnection(startUserId, targetUserId, maxDepth = MAX_DEPTH) {
   if (startUserId === targetUserId) return [startUserId];
 
@@ -63,6 +67,7 @@ async function findConnection(startUserId, targetUserId, maxDepth = MAX_DEPTH) {
     for (const fid of friends) {
       if (visited.has(fid)) continue;
       visited.add(fid);
+
       const newPath = [...path, fid];
       if (fid === targetUserId) return newPath;
       queue.push({ id: fid, path: newPath });
@@ -71,14 +76,22 @@ async function findConnection(startUserId, targetUserId, maxDepth = MAX_DEPTH) {
   return null;
 }
 
-// --- ROUTE ---
+// --- ROUTES ---
+
+// Root route (for testing)
+app.get("/", (req, res) => {
+  res.send("✅ Roblox Connections Finder backend is running!");
+});
+
+// /find?user=MiniToon&start=123456
 app.get("/find", async (req, res) => {
   const username = req.query.user;
+  const startUserId = parseInt(req.query.start) || 1;
+
   if (!username) return res.json({ success: false, message: "Missing ?user parameter" });
+  if (!startUserId) return res.json({ success: false, message: "Missing ?start parameter" });
 
   try {
-    // for demo: start from a fixed test user (e.g., your own Roblox ID)
-    const startUserId = 1; // change to your own ID later
     const targetUserId = await getUserId(username);
     if (!targetUserId) return res.json({ success: false, message: "User not found." });
 
@@ -90,7 +103,7 @@ app.get("/find", async (req, res) => {
       return res.json({ success: false, message: "No connection found.", elapsed });
     }
 
-    // convert ids to names
+    // Convert IDs to usernames for readability
     const names = [];
     for (const uid of path) names.push(await getUsername(uid));
 
@@ -99,13 +112,15 @@ app.get("/find", async (req, res) => {
       message: "Connection found!",
       elapsed,
       pathUserIds: path,
-      pathUsernames: names
+      pathUsernames: names,
     });
   } catch (err) {
-    console.error(err);
+    console.error("Backend error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-app.listen(PORT, () => console.log("✅ Advanced backend running on port " + PORT));
-
+// --- START SERVER ---
+app.listen(PORT, () => {
+  console.log("✅ Backend running on port " + PORT);
+});
